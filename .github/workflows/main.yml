@@ -1,0 +1,98 @@
+
+name: Build AflatoonMubdi dylib
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "Select build mode"
+        required: true
+        default: embedded-safe
+        type: choice
+        options:
+          - embedded-safe
+          - jailbreak-runtime
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS Dynamic Library
+    runs-on: macos-14
+
+    env:
+      AP_BUILD_MODE: ${{ inputs.build_mode || 'embedded-safe' }}
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          brew install make ldid
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install Theos
+        run: |
+          export THEOS="$HOME/theos"
+
+          if [ ! -d "$THEOS" ]; then
+            git clone --depth 1 --recursive \
+              https://github.com/theos/theos.git "$THEOS"
+          fi
+
+          mkdir -p "$THEOS/sdks"
+
+          if [ ! -f "$THEOS/sdks/iPhoneOS.sdk/SDKSettings.json" ]; then
+            rm -rf "$THEOS/sdks"
+            git clone --depth 1 \
+              https://github.com/theos/sdks.git "$THEOS/sdks"
+          fi
+
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+
+      - name: Verify Project
+        run: |
+          test -f Makefile
+          test -f Main.m
+          test -f Hook.m
+          test -f UI.m
+          test -f Shared.h
+
+      - name: Build AflatoonMubdi
+        run: |
+          set -o pipefail
+
+          make clean || true
+
+          make FINALPACKAGE=1 \
+            AP_BUILD_MODE="$AP_BUILD_MODE"
+
+      - name: Collect Dylib
+        run: |
+          mkdir -p out
+
+          find .theos -type f \
+            -name 'AflatoonMubdi.dylib' \
+            -exec cp {} out/ \;
+
+          test -s out/AflatoonMubdi.dylib
+
+          file out/AflatoonMubdi.dylib
+
+          otool -L out/AflatoonMubdi.dylib
+
+          echo "$AP_BUILD_MODE" > out/BUILD-MODE.txt
+
+          shasum -a 256 out/AflatoonMubdi.dylib \
+            > out/SHA256.txt
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AflatoonMubdi-${{ env.AP_BUILD_MODE }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
